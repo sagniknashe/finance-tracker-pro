@@ -1,8 +1,3 @@
-// Finance Tracker Pro — Prisma schema
-// Money is stored as BigInt minor units (cents). All domain tables are
-// user-scoped and cascade on user deletion. CHECK constraints, CITEXT and
-// trigram indexes are added via hand-edited migration SQL (see prisma/migrations).
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -13,7 +8,242 @@ datasource db {
   directUrl = env("DIRECT_URL")
 }
 
-// ----------------------------- Enums -----------------------------
+model User {
+  id            String               @id @default(uuid()) @db.Uuid
+  email         String               @unique
+  passwordHash  String?              @map("password_hash")
+  name          String?
+  baseCurrency  String               @default("USD") @map("base_currency") @db.Char(3)
+  locale        String               @default("en-US")
+  theme         ThemePref            @default(SYSTEM)
+  emailVerified DateTime?            @map("email_verified") @db.Timestamptz(6)
+  createdAt     DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  accounts      Account[]
+  authAccounts  AuthAccount[]
+  budgets       Budget[]
+  categories    Category[]
+  rules         CategorizationRule[]
+  contributions GoalContribution[]
+  imports       ImportHistory[]
+  savingsGoals  SavingsGoal[]
+  sessions      Session[]
+  transactions  Transaction[]
+
+  @@map("users")
+}
+
+model Account {
+  id             String          @id @default(uuid()) @db.Uuid
+  userId         String          @map("user_id") @db.Uuid
+  name           String
+  type           AccountType
+  openingBalance BigInt          @default(0) @map("opening_balance")
+  currency       String          @default("USD") @db.Char(3)
+  isArchived     Boolean         @default(false) @map("is_archived")
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  imports        ImportHistory[]
+  goals          SavingsGoal[]
+  transactions   Transaction[]
+
+  @@unique([userId, name])
+  @@index([userId])
+  @@index([userId, isArchived])
+  @@map("accounts")
+}
+
+model Category {
+  id           String               @id @default(uuid()) @db.Uuid
+  userId       String               @map("user_id") @db.Uuid
+  parentId     String?              @map("parent_id") @db.Uuid
+  name         String
+  type         CategoryType
+  color        String               @default("#6B7280")
+  icon         String?
+  isSystem     Boolean              @default(false) @map("is_system")
+  createdAt    DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime             @updatedAt @map("updated_at") @db.Timestamptz(6)
+  budgets      Budget[]
+  parent       Category?            @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children     Category[]           @relation("CategoryTree")
+  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  rules        CategorizationRule[]
+  transactions Transaction[]
+
+  @@unique([userId, name, type])
+  @@index([userId])
+  @@index([userId, type])
+  @@index([parentId])
+  @@map("categories")
+}
+
+model Transaction {
+  id             String          @id @default(uuid()) @db.Uuid
+  userId         String          @map("user_id") @db.Uuid
+  accountId      String          @map("account_id") @db.Uuid
+  categoryId     String?         @map("category_id") @db.Uuid
+  type           TransactionType
+  amount         BigInt
+  currency       String          @default("USD") @db.Char(3)
+  occurredOn     DateTime        @map("occurred_on") @db.Date
+  description    String          @default("")
+  notes          String?
+  transferPairId String?         @unique @map("transfer_pair_id") @db.Uuid
+  importBatchId  String?         @map("import_batch_id") @db.Uuid
+  dedupeHash     String?         @map("dedupe_hash")
+  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz(6)
+  account        Account         @relation(fields: [accountId], references: [id])
+  category       Category?       @relation(fields: [categoryId], references: [id])
+  importBatch    ImportHistory?  @relation(fields: [importBatchId], references: [id])
+  transferPair   Transaction?    @relation("Transfer", fields: [transferPairId], references: [id])
+  transferOf     Transaction?    @relation("Transfer")
+  user           User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, dedupeHash])
+  @@index([userId, occurredOn(sort: Desc)])
+  @@index([userId, categoryId, occurredOn(sort: Desc)])
+  @@index([userId, accountId, occurredOn(sort: Desc)])
+  @@index([userId, type, occurredOn(sort: Desc)])
+  @@index([importBatchId])
+  @@map("transactions")
+}
+
+model Budget {
+  id             String       @id @default(uuid()) @db.Uuid
+  userId         String       @map("user_id") @db.Uuid
+  categoryId     String       @map("category_id") @db.Uuid
+  amount         BigInt
+  period         BudgetPeriod @default(MONTHLY)
+  startMonth     DateTime     @map("start_month") @db.Date
+  alertThreshold Int          @default(80) @map("alert_threshold") @db.SmallInt
+  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  category       Category     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, categoryId, period, startMonth])
+  @@index([userId, startMonth])
+  @@index([categoryId])
+  @@map("budgets")
+}
+
+model SavingsGoal {
+  id            String             @id @default(uuid()) @db.Uuid
+  userId        String             @map("user_id") @db.Uuid
+  accountId     String?            @map("account_id") @db.Uuid
+  name          String
+  targetAmount  BigInt             @map("target_amount")
+  currentAmount BigInt             @default(0) @map("current_amount")
+  targetDate    DateTime?          @map("target_date") @db.Date
+  status        GoalStatus         @default(ACTIVE)
+  createdAt     DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime           @updatedAt @map("updated_at") @db.Timestamptz(6)
+  contributions GoalContribution[]
+  account       Account?           @relation(fields: [accountId], references: [id])
+  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@map("savings_goals")
+}
+
+model GoalContribution {
+  id         String      @id @default(uuid()) @db.Uuid
+  goalId     String      @map("goal_id") @db.Uuid
+  userId     String      @map("user_id") @db.Uuid
+  amount     BigInt
+  occurredOn DateTime    @default(now()) @map("occurred_on") @db.Date
+  note       String?
+  createdAt  DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  goal       SavingsGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
+  user       User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([goalId, occurredOn(sort: Desc)])
+  @@map("goal_contributions")
+}
+
+model CategorizationRule {
+  id         String       @id @default(uuid()) @db.Uuid
+  userId     String       @map("user_id") @db.Uuid
+  categoryId String       @map("category_id") @db.Uuid
+  field      RuleField    @default(DESCRIPTION)
+  operator   RuleOperator @default(CONTAINS)
+  value      String
+  priority   Int          @default(100)
+  isActive   Boolean      @default(true) @map("is_active")
+  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime     @updatedAt @map("updated_at") @db.Timestamptz(6)
+  category   Category     @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  user       User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, field, operator, value, categoryId])
+  @@index([userId, priority])
+  @@map("categorization_rules")
+}
+
+model ImportHistory {
+  id            String        @id @default(uuid()) @db.Uuid
+  userId        String        @map("user_id") @db.Uuid
+  accountId     String?       @map("account_id") @db.Uuid
+  fileName      String        @map("file_name")
+  source        String?
+  status        ImportStatus  @default(PENDING)
+  columnMapping Json?         @map("column_mapping")
+  rowCount      Int           @default(0) @map("row_count")
+  importedCount Int           @default(0) @map("imported_count")
+  skippedCount  Int           @default(0) @map("skipped_count")
+  errorMessage  String?       @map("error_message")
+  createdAt     DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime      @updatedAt @map("updated_at") @db.Timestamptz(6)
+  account       Account?      @relation(fields: [accountId], references: [id])
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions  Transaction[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("import_history")
+}
+
+model AuthAccount {
+  id                String  @id @default(uuid()) @db.Uuid
+  userId            String  @map("user_id") @db.Uuid
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String?
+  access_token      String?
+  expires_at        BigInt?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("auth_accounts")
+}
+
+model Session {
+  id           String   @id @default(uuid()) @db.Uuid
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id") @db.Uuid
+  expires      DateTime @db.Timestamptz(6)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime @db.Timestamptz(6)
+
+  @@id([identifier, token])
+  @@map("verification_tokens")
+}
+
 enum AccountType {
   CHECKING
   SAVINGS
@@ -73,263 +303,4 @@ enum ThemePref {
   SYSTEM
   LIGHT
   DARK
-}
-
-// ----------------------------- User ------------------------------
-model User {
-  id            String    @id @default(uuid()) @db.Uuid
-  email         String    @unique
-  passwordHash  String?   @map("password_hash")
-  name          String?
-  image         String?
-  country       String?   @db.Char(2)
-  baseCurrency  String    @default("USD") @map("base_currency") @db.Char(3)
-  locale        String    @default("en-US")
-  theme         ThemePref @default(SYSTEM)
-  emailVerified DateTime? @map("email_verified") @db.Timestamptz
-  onboardedAt   DateTime? @map("onboarded_at") @db.Timestamptz
-  createdAt     DateTime  @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz
-
-  accounts      Account[]
-  categories    Category[]
-  transactions  Transaction[]
-  budgets       Budget[]
-  savingsGoals  SavingsGoal[]
-  contributions GoalContribution[]
-  rules         CategorizationRule[]
-  imports       ImportHistory[]
-  authAccounts  AuthAccount[]
-  sessions      Session[]
-
-  @@map("users")
-}
-
-// ---------------------------- Account ----------------------------
-model Account {
-  id             String      @id @default(uuid()) @db.Uuid
-  userId         String      @map("user_id") @db.Uuid
-  name           String
-  type           AccountType
-  openingBalance BigInt      @default(0) @map("opening_balance")
-  currency       String      @default("USD") @db.Char(3)
-  isArchived     Boolean     @default(false) @map("is_archived")
-  createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt      DateTime    @updatedAt @map("updated_at") @db.Timestamptz
-
-  user         User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  transactions Transaction[]
-  goals        SavingsGoal[]
-  imports      ImportHistory[]
-
-  @@unique([userId, name])
-  @@index([userId])
-  @@index([userId, isArchived])
-  @@map("accounts")
-}
-
-// ---------------------------- Category ---------------------------
-model Category {
-  id        String       @id @default(uuid()) @db.Uuid
-  userId    String       @map("user_id") @db.Uuid
-  parentId  String?      @map("parent_id") @db.Uuid
-  name      String
-  type      CategoryType
-  color     String       @default("#6B7280")
-  icon      String?
-  isSystem  Boolean      @default(false) @map("is_system")
-  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt DateTime     @updatedAt @map("updated_at") @db.Timestamptz
-
-  user         User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
-  parent       Category?            @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Cascade)
-  children     Category[]           @relation("CategoryTree")
-  transactions Transaction[]
-  budgets      Budget[]
-  rules        CategorizationRule[]
-
-  @@unique([userId, name, type])
-  @@index([userId])
-  @@index([userId, type])
-  @@index([parentId])
-  @@map("categories")
-}
-
-// -------------------------- Transaction --------------------------
-model Transaction {
-  id             String          @id @default(uuid()) @db.Uuid
-  userId         String          @map("user_id") @db.Uuid
-  accountId      String          @map("account_id") @db.Uuid
-  categoryId     String?         @map("category_id") @db.Uuid
-  type           TransactionType
-  amount         BigInt
-  currency       String          @default("USD") @db.Char(3)
-  occurredOn     DateTime        @map("occurred_on") @db.Date
-  description    String          @default("")
-  notes          String?
-  transferPairId String?         @unique @map("transfer_pair_id") @db.Uuid
-  importBatchId  String?         @map("import_batch_id") @db.Uuid
-  dedupeHash     String?         @map("dedupe_hash")
-  createdAt      DateTime        @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt      DateTime        @updatedAt @map("updated_at") @db.Timestamptz
-
-  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
-  account      Account        @relation(fields: [accountId], references: [id], onDelete: Restrict)
-  category     Category?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
-  transferPair Transaction?   @relation("Transfer", fields: [transferPairId], references: [id], onDelete: SetNull)
-  transferOf   Transaction?   @relation("Transfer")
-  importBatch  ImportHistory? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
-
-  @@unique([userId, dedupeHash])
-  @@index([userId, occurredOn(sort: Desc)])
-  @@index([userId, categoryId, occurredOn(sort: Desc)])
-  @@index([userId, accountId, occurredOn(sort: Desc)])
-  @@index([userId, type, occurredOn(sort: Desc)])
-  @@index([importBatchId])
-  @@map("transactions")
-}
-
-// ----------------------------- Budget ----------------------------
-model Budget {
-  id             String       @id @default(uuid()) @db.Uuid
-  userId         String       @map("user_id") @db.Uuid
-  categoryId     String       @map("category_id") @db.Uuid
-  amount         BigInt
-  period         BudgetPeriod @default(MONTHLY)
-  startMonth     DateTime     @map("start_month") @db.Date
-  alertThreshold Int          @default(80) @map("alert_threshold") @db.SmallInt
-  createdAt      DateTime     @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt      DateTime     @updatedAt @map("updated_at") @db.Timestamptz
-
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, categoryId, period, startMonth])
-  @@index([userId, startMonth])
-  @@index([categoryId])
-  @@map("budgets")
-}
-
-// -------------------------- SavingsGoal --------------------------
-model SavingsGoal {
-  id            String     @id @default(uuid()) @db.Uuid
-  userId        String     @map("user_id") @db.Uuid
-  accountId     String?    @map("account_id") @db.Uuid
-  name          String
-  targetAmount  BigInt     @map("target_amount")
-  currentAmount BigInt     @default(0) @map("current_amount")
-  targetDate    DateTime?  @map("target_date") @db.Date
-  status        GoalStatus @default(ACTIVE)
-  createdAt     DateTime   @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt     DateTime   @updatedAt @map("updated_at") @db.Timestamptz
-
-  user          User               @relation(fields: [userId], references: [id], onDelete: Cascade)
-  account       Account?           @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  contributions GoalContribution[]
-
-  @@index([userId, status])
-  @@map("savings_goals")
-}
-
-model GoalContribution {
-  id         String   @id @default(uuid()) @db.Uuid
-  goalId     String   @map("goal_id") @db.Uuid
-  userId     String   @map("user_id") @db.Uuid
-  amount     BigInt
-  occurredOn DateTime @default(now()) @map("occurred_on") @db.Date
-  note       String?
-  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
-
-  goal SavingsGoal @relation(fields: [goalId], references: [id], onDelete: Cascade)
-  user User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([goalId, occurredOn(sort: Desc)])
-  @@map("goal_contributions")
-}
-
-// ----------------------- CategorizationRule ----------------------
-model CategorizationRule {
-  id         String       @id @default(uuid()) @db.Uuid
-  userId     String       @map("user_id") @db.Uuid
-  categoryId String       @map("category_id") @db.Uuid
-  field      RuleField    @default(DESCRIPTION)
-  operator   RuleOperator @default(CONTAINS)
-  value      String
-  priority   Int          @default(100)
-  isActive   Boolean      @default(true) @map("is_active")
-  createdAt  DateTime     @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt  DateTime     @updatedAt @map("updated_at") @db.Timestamptz
-
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  category Category @relation(fields: [categoryId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, field, operator, value, categoryId])
-  @@index([userId, priority])
-  @@map("categorization_rules")
-}
-
-// --------------------------- ImportHistory -----------------------
-model ImportHistory {
-  id            String       @id @default(uuid()) @db.Uuid
-  userId        String       @map("user_id") @db.Uuid
-  accountId     String?      @map("account_id") @db.Uuid
-  fileName      String       @map("file_name")
-  source        String?
-  status        ImportStatus @default(PENDING)
-  columnMapping Json?        @map("column_mapping")
-  rowCount      Int          @default(0) @map("row_count")
-  importedCount Int          @default(0) @map("imported_count")
-  skippedCount  Int          @default(0) @map("skipped_count")
-  errorMessage  String?      @map("error_message")
-  createdAt     DateTime     @default(now()) @map("created_at") @db.Timestamptz
-  updatedAt     DateTime     @updatedAt @map("updated_at") @db.Timestamptz
-
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  account      Account?      @relation(fields: [accountId], references: [id], onDelete: SetNull)
-  transactions Transaction[]
-
-  @@index([userId, createdAt(sort: Desc)])
-  @@map("import_history")
-}
-
-// --------------------------- Auth.js models ----------------------
-model AuthAccount {
-  id                String  @id @default(uuid()) @db.Uuid
-  userId            String  @map("user_id") @db.Uuid
-  type              String
-  provider          String
-  providerAccountId String  @map("provider_account_id")
-  refresh_token     String?
-  access_token      String?
-  expires_at        BigInt?
-  token_type        String?
-  scope             String?
-  id_token          String?
-  session_state     String?
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([provider, providerAccountId])
-  @@map("auth_accounts")
-}
-
-model Session {
-  id           String   @id @default(uuid()) @db.Uuid
-  sessionToken String   @unique @map("session_token")
-  userId       String   @map("user_id") @db.Uuid
-  expires      DateTime @db.Timestamptz
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-  @@map("sessions")
-}
-
-model VerificationToken {
-  identifier String
-  token      String
-  expires    DateTime @db.Timestamptz
-
-  @@id([identifier, token])
-  @@map("verification_tokens")
 }
